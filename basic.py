@@ -75,15 +75,21 @@ def load_dicom_zip(zip_file):
 
 def load_nrrd(uploaded_file):
     import tempfile
-    # Rewind the uploaded file to the beginning
-    uploaded_file.seek(0)
+    import os
 
-    # Save BytesIO to a temp file
+    if uploaded_file is None:
+        return None
+
+    # Some Streamlit uploaded files may not support seek(), so wrap safely
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(0)
+
+    # Save to temp file
     with tempfile.NamedTemporaryFile(suffix=".nrrd", delete=False) as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
 
-    # Read with nrrd
+    # Read NRRD
     data, _ = nrrd.read(tmp_path)
     os.remove(tmp_path)
     return data.astype(int)
