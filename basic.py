@@ -137,7 +137,8 @@ if dicom_zip:
     seg = load_nrrd(nrrd_file)
 
     # Extract and prepare segmentation slice
-    seg_slice_idx = min(slice_idx, seg.shape[0]) - 1
+    # Make sure slice index does not exceed segmentation bounds
+    seg_slice_idx = min(slice_idx, seg.shape[0]-1)
     seg_slice = seg[seg_slice_idx]
     
     # Make 2D if needed
