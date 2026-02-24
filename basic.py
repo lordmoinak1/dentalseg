@@ -46,13 +46,14 @@ def load_dicom_zip(zip_file):
         slope = getattr(s, "RescaleSlope", 1)
         intercept = getattr(s, "RescaleIntercept", 0)
         img = img * slope + intercept
-
+    
         if img.shape != target_shape:
-            # Convert to integer for PIL
-            img_resized = Image.fromarray(np.clip(img, 0, np.max(img)).astype(np.uint16))
+            # Normalize to 0-255 for PIL
+            img_norm = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
+            img_resized = Image.fromarray(img_norm.astype(np.uint8))
             img_resized = img_resized.resize(target_shape[::-1], Image.BILINEAR)
             img = np.array(img_resized).astype(np.float32)
-
+    
         vol_slices.append(img)
 
     vol = np.stack(vol_slices, axis=0)
