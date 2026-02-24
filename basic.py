@@ -1,10 +1,9 @@
 import os
-import tempfile
 from collections import defaultdict
 
 import numpy as np
 import streamlit as st
-import SimpleITK as sitk
+import pydicom
 import nrrd
 from PIL import Image
 from scipy.ndimage import label as cc_label
@@ -26,23 +25,32 @@ MODALITY_ORDER = ["T1C", "T1N", "T2F", "T2W"]
 # ==============================
 
 def load_dicom_folder(folder_path):
-    reader = sitk.ImageSeriesReader()
-    series_ids = reader.GetGDCMSeriesIDs(folder_path)
-    if not series_ids:
-        raise ValueError(f"No DICOM series found in {folder_path}")
-    series_files = reader.GetGDCMSeriesFileNames(folder_path, series_ids[0])
-    reader.SetFileNames(series_files)
-    img = reader.Execute()
-    vol = sitk.GetArrayFromImage(img).astype(np.float32)  # shape: [z, y, x]
+    """Load DICOM folder as 3D numpy array and affine"""
+    files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.lower().endswith(".dcm")]
+    if not files:
+        raise ValueError(f"No DICOM files found in {folder_path}")
+
+    slices = [pydicom.dcmread(f) for f in files]
+    slices.sort(key=lambda x: int(x.InstanceNumber))
+
+    vol = np.stack([s.pixel_array for s in slices], axis=0).astype(np.float32)
+
+    # Apply slope/intercept
+    for i, s in enumerate(slices):
+        slope = getattr(s, "RescaleSlope", 1)
+        intercept = getattr(s, "RescaleIntercept", 0)
+        vol[i] = vol[i] * slope + intercept
+
+    spacing = [float(slices[0].PixelSpacing[0]), float(slices[0].PixelSpacing[1]), float(slices[0].SliceThickness)]
     affine = np.eye(4)
-    spacing = img.GetSpacing()
     affine[:3, :3] = np.diag(spacing)
-    affine[:3, 3] = img.GetOrigin()
+    affine[:3, 3] = 0
+
     return vol, affine
 
 def load_nrrd(file):
     data, header = nrrd.read(file)
-    return data.astype(np.int32), np.eye(4)  # assume voxel spacing is isotropic for simplicity
+    return data.astype(np.int32), np.eye(4)
 
 def normalize_slice(slc):
     slc = np.nan_to_num(slc)
@@ -66,51 +74,50 @@ def resize_mask(mask, size=256):
 
 def overlay_segmentation(img, mask, alpha=0.4):
     base = (img * 255).astype(np.uint8)
-    rgb = np.stack([base] * 3, axis=-1).astype(np.float32)
+    rgb = np.stack([base]*3, axis=-1).astype(np.float32)
     tumor = mask > 0
-    rgb[tumor] = (1 - alpha) * rgb[tumor] + alpha * np.array([255, 0, 0])
+    rgb[tumor] = (1 - alpha) * rgb[tumor] + alpha * np.array([255,0,0])
     return np.clip(rgb / 255.0, 0, 1)
 
 def spacing_from_affine(affine):
-    return np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
+    return np.sqrt((affine[:3,:3]**2).sum(axis=0))
 
 def total_volume_mm3(seg, affine):
     voxel_vol = np.prod(spacing_from_affine(affine))
-    return int(np.sum(seg > 0)) * voxel_vol
+    return int(np.sum(seg>0)) * voxel_vol
 
 def per_lesion_volumes(seg, affine):
     voxel_vol = np.prod(spacing_from_affine(affine))
-    labeled, num = cc_label(seg > 0, structure=np.ones((3, 3, 3)))
-    return {
-        lab: np.sum(labeled == lab) * voxel_vol
-        for lab in range(1, num + 1)
-    }
+    labeled, num = cc_label(seg>0, structure=np.ones((3,3,3)))
+    return {lab: np.sum(labeled==lab)*voxel_vol for lab in range(1,num+1)}
 
 # ==============================
 # Streamlit UI
 # ==============================
 
 st.set_page_config(page_title="NeuroTracker", layout="wide")
-st.title("🧠 NeuroTracker — Longitudinal Quantitative Tumor Tracking (DICOM + NRRD)")
+st.title("🧠 NeuroTracker — DICOM + NRRD Tumor Tracking")
 
 st.markdown("Upload DICOM folders (one per modality per timepoint) and NRRD segmentation masks.")
 
-# Upload multiple DICOM folders
+# Upload DICOM folders (one per modality per timepoint)
 dicom_folders = st.file_uploader(
     "Upload DICOM folders (zipped)",
     type=["zip"],
-    accept_multiple_files=True,
+    accept_multiple_files=True
 )
 
 # Upload NRRD segmentation files
 nrrd_files = st.file_uploader(
     "Upload segmentation masks (.nrrd)",
     type=["nrrd"],
-    accept_multiple_files=True,
+    accept_multiple_files=True
 )
 
 if not dicom_folders and not nrrd_files:
     st.stop()
+
+import tempfile, zipfile
 
 # ==============================
 # Group files by timepoint
@@ -118,36 +125,29 @@ if not dicom_folders and not nrrd_files:
 
 timepoints = defaultdict(lambda: {"modalities": {}, "seg": None})
 
-import zipfile
-
 for f in dicom_folders:
-    name = f.name.lower().replace(".zip", "")
+    name = f.name.lower().replace(".zip","")
     for tag, mod in MODALITY_MAP.items():
         if tag in name:
-            # Extract zip to temp folder
             tmpdir = tempfile.mkdtemp()
             with zipfile.ZipFile(f, "r") as zip_ref:
                 zip_ref.extractall(tmpdir)
-            timepoints[name.replace(tag, "")]["modalities"][mod] = tmpdir
+            timepoints[name.replace(tag,"")]["modalities"][mod] = tmpdir
             break
 
 for f in nrrd_files:
-    name = f.name.lower().replace(".nrrd", "")
+    name = f.name.lower().replace(".nrrd","")
     timepoints[name]["seg"] = f
 
 # ==============================
 # Layout
 # ==============================
 
-viewer_col, metrics_col = st.columns([3, 1])
+viewer_col, metrics_col = st.columns([3,1])
 metrics_data = []
 
-# ==============================
-# LEFT: Viewer
-# ==============================
-
 with viewer_col:
-    axis = 0  # DICOM/SimpleITK loads as [z, y, x]
+    axis = 0  # DICOM arrays are [z, y, x]
 
     for tp_idx, (_, data) in enumerate(sorted(timepoints.items()), start=1):
         mods = data["modalities"]
@@ -156,24 +156,20 @@ with viewer_col:
         if any(m not in mods for m in MODALITY_ORDER):
             continue
 
-        label_col, *img_cols = st.columns([0.5, 1, 1, 1, 1])
+        label_col, *img_cols = st.columns([0.5,1,1,1,1])
 
         with label_col:
-            st.markdown(
-                f"""
+            st.markdown(f"""
                 <div style="
                     transform: rotate(-90deg);
                     transform-origin: left top;
                     white-space: nowrap;
                     font-size: 18px;
                     font-weight: 600;
-                    margin-top: 140px;
-                ">
+                    margin-top: 140px;">
                     ⏱ Timepoint {tp_idx}
                 </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            """, unsafe_allow_html=True)
 
         volumes = {}
         for mod in MODALITY_ORDER:
@@ -187,10 +183,8 @@ with viewer_col:
         max_slices = min(v.shape[axis] for v in volumes.values())
         slice_idx = st.slider(
             f"Slice — Timepoint {tp_idx}",
-            0,
-            max_slices - 1,
-            max_slices // 2,
-            key=f"slice_{tp_idx}",
+            0, max_slices-1, max_slices//2,
+            key=f"slice_{tp_idx}"
         )
 
         for col, mod in zip(img_cols, MODALITY_ORDER):
@@ -202,17 +196,11 @@ with viewer_col:
                 st.image(img, caption=mod, use_column_width=True)
 
         if seg is not None:
-            metrics_data.append(
-                {
-                    "tp": tp_idx,
-                    "total": total_volume_mm3(seg, seg_affine),
-                    "per_lesion": per_lesion_volumes(seg, seg_affine),
-                }
-            )
-
-# ==============================
-# RIGHT: Metrics Pane
-# ==============================
+            metrics_data.append({
+                "tp": tp_idx,
+                "total": total_volume_mm3(seg, seg_affine),
+                "per_lesion": per_lesion_volumes(seg, seg_affine)
+            })
 
 with metrics_col:
     for m in metrics_data:
@@ -220,8 +208,6 @@ with metrics_col:
         st.markdown(f"- **Total volume:** {m['total']:,.2f} mm³")
         st.markdown(f"- **Lesions:** {len(m['per_lesion'])}")
         st.markdown("**Per-lesion volume (mm³):**")
-        for lab, vol in sorted(
-            m["per_lesion"].items(), key=lambda x: x[1], reverse=True
-        ):
+        for lab, vol in sorted(m['per_lesion'].items(), key=lambda x:x[1], reverse=True):
             st.markdown(f"• Lesion {lab}: {vol:,.2f}")
         st.markdown("---")
