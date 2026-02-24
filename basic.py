@@ -105,8 +105,8 @@ def resize_img(img, size=256):
 
 st.title("DICOM Zip + NRRD Viewer")
 
-dicom_zip = st.file_uploader("Upload DICOM.zip", type="zip")
-nrrd_file = st.file_uploader("Upload Segmentation (.nrrd)", type="nrrd")
+dicom_zip = st.file_uploader("Upload DICOM.zip", type="zip", key="dicom_zip")
+nrrd_file = st.file_uploader("Upload Segmentation (.nrrd)", type="nrrd", key="nrrd_file")
 
 if dicom_zip:
     vol = load_dicom_zip(dicom_zip)
