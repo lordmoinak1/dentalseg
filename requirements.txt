@@ -5,3 +5,4 @@ scipy
 nibabel
 pynrrd
 SimpleITK
+pydicom
