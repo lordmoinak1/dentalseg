@@ -38,24 +38,26 @@ def load_dicom_zip(zip_file):
             return 0
     slices.sort(key=get_slice_position)
 
-    # Make all slices the same shape
+    # Use the first slice as reference shape
     target_shape = (slices[0].Rows, slices[0].Columns)
     vol_slices = []
+    
     for s in slices:
         img = s.pixel_array.astype(np.float32)
         slope = getattr(s, "RescaleSlope", 1)
         intercept = getattr(s, "RescaleIntercept", 0)
         img = img * slope + intercept
     
-        if img.shape != target_shape:
-            # Normalize to 0-255 for PIL
-            img_norm = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
-            img_resized = Image.fromarray(img_norm.astype(np.uint8))
-            img_resized = img_resized.resize(target_shape[::-1], Image.BILINEAR)
-            img = np.array(img_resized).astype(np.float32)
+        # Normalize to 0-255 for PIL
+        img_norm = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
     
-        vol_slices.append(img)
-
+        # Resize ALL slices to target_shape
+        img_resized = Image.fromarray(img_norm.astype(np.uint8))
+        img_resized = img_resized.resize(target_shape[::-1], Image.BILINEAR)
+        img_resized = np.array(img_resized).astype(np.float32)
+    
+        vol_slices.append(img_resized)
+    
     vol = np.stack(vol_slices, axis=0)
     return vol
 
