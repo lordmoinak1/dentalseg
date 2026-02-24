@@ -128,18 +128,23 @@ if dicom_zip:
     # if nrrd_file:
     seg = load_nrrd(nrrd_file)
 
-    # Make sure slice index is valid
-    seg_slice_idx = min(slice_idx, seg.shape[0]-1)
-
-    # Resize segmentation to match DICOM slice
-    seg_slice = np.array(
-        Image.fromarray(seg[seg_slice_idx]).resize((img.shape[1], img.shape[0]), Image.NEAREST)
+    # Extract and prepare segmentation slice
+    seg_slice_idx = min(slice_idx, seg.shape[0]) - 1
+    seg_slice = seg[seg_slice_idx]
+    
+    # Make 2D if needed
+    if seg_slice.ndim > 2:
+        seg_slice = seg_slice[..., 0]
+    
+    # Convert to binary uint8
+    seg_slice = (seg_slice > 0).astype(np.uint8)
+    
+    # Resize to match DICOM slice
+    seg_slice_resized = np.array(
+        Image.fromarray(seg_slice).resize((img.shape[1], img.shape[0]), Image.NEAREST)
     )
 
-    # Convert to binary mask
-    seg_slice = (seg_slice > 0).astype(int)
-
     # Overlay in green
-    img = overlay_segmentation(img, seg_slice, alpha=0.4, color=[0, 255, 0])
+    img = overlay_segmentation(img, seg_slice_resized, alpha=0.4, color=[0, 255, 0])
 
     st.image(resize_img(img), caption=f"Slice {slice_idx}", use_column_width=True)
