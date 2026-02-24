@@ -75,10 +75,14 @@ def load_dicom_zip(zip_file):
 
 def load_nrrd(uploaded_file):
     import tempfile
+    # Rewind the uploaded file to the beginning
+    uploaded_file.seek(0)
+
     # Save BytesIO to a temp file
     with tempfile.NamedTemporaryFile(suffix=".nrrd", delete=False) as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
+
     # Read with nrrd
     data, _ = nrrd.read(tmp_path)
     os.remove(tmp_path)
