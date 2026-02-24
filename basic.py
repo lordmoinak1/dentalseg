@@ -123,8 +123,6 @@ if dicom_zip:
     slice_idx = st.slider("Slice index", 0, vol.shape[0]-1, vol.shape[0]//2)
     img = normalize_slice(vol[slice_idx])
 
-    nrrd_file = st.file_uploader("Upload Segmentation (.nrrd)", type="nrrd")
-
     # if nrrd_file:
     seg = load_nrrd(nrrd_file)
 
