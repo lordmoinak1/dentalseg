@@ -45,10 +45,13 @@ def load_dicom_zip(zip_file):
         img = s.pixel_array.astype(np.float32)
         slope = getattr(s, "RescaleSlope", 1)
         intercept = getattr(s, "RescaleIntercept", 0)
-        img = img*slope + intercept
+        img = img * slope + intercept
 
         if img.shape != target_shape:
-            img = np.array(Image.fromarray(img).resize(target_shape[::-1], Image.BILINEAR))
+            # Convert to integer for PIL
+            img_resized = Image.fromarray(np.clip(img, 0, np.max(img)).astype(np.uint16))
+            img_resized = img_resized.resize(target_shape[::-1], Image.BILINEAR)
+            img = np.array(img_resized).astype(np.float32)
 
         vol_slices.append(img)
 
@@ -71,7 +74,7 @@ def overlay_segmentation(img, mask, alpha=0.4):
 
 def resize_img(img, size=256):
     im = Image.fromarray((img*255).astype(np.uint8))
-    im = im.resize((size,size), Image.BILINEAR)
+    im = im.resize((size, size), Image.BILINEAR)
     return np.array(im)/255.0
 
 # ----------------------
@@ -87,13 +90,16 @@ if dicom_zip:
     vol = load_dicom_zip(dicom_zip)
     st.write("Volume shape:", vol.shape)
 
+    # Slider to pick slice
     slice_idx = st.slider("Slice index", 0, vol.shape[0]-1, vol.shape[0]//2)
     img = normalize_slice(vol[slice_idx])
 
     if nrrd_file:
         seg = load_nrrd(nrrd_file)
-        # Resize segmentation to match slice
-        seg_slice = np.array(Image.fromarray(seg[slice_idx]).resize((img.shape[1], img.shape[0]), Image.NEAREST))
+        # Resize segmentation to match slice dimensions
+        seg_slice = np.array(
+            Image.fromarray(seg[slice_idx]).resize((img.shape[1], img.shape[0]), Image.NEAREST)
+        )
         img = overlay_segmentation(img, seg_slice)
 
     st.image(resize_img(img), caption=f"Slice {slice_idx}", use_column_width=True)
