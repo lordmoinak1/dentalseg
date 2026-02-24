@@ -12,23 +12,24 @@ from PIL import Image
 # ----------------------
 
 def load_dicom_zip(zip_file):
+    import shutil
+
     tmpdir = tempfile.mkdtemp()
     with zipfile.ZipFile(zip_file, "r") as z:
         z.extractall(tmpdir)
 
-    # Recursively find all .dcm files
+    # Recursively find DICOM files
     files = []
     for root, _, filenames in os.walk(tmpdir):
         for f in filenames:
             if f.lower().endswith(".dcm"):
                 files.append(os.path.join(root, f))
-
     if not files:
         raise ValueError("No DICOM files found in zip")
 
     slices = [pydicom.dcmread(f) for f in files]
 
-    # Sort slices by ImagePositionPatient[2] or SliceLocation
+    # Sort slices by position
     def get_slice_position(ds):
         if hasattr(ds, "ImagePositionPatient"):
             return float(ds.ImagePositionPatient[2])
@@ -38,26 +39,37 @@ def load_dicom_zip(zip_file):
             return 0
     slices.sort(key=get_slice_position)
 
-    # Use the first slice as reference shape
-    target_shape = (slices[0].Rows, slices[0].Columns)
+    # Use first slice as reference shape
+    ref_rows, ref_cols = slices[0].Rows, slices[0].Columns
     vol_slices = []
-    
+
     for s in slices:
         img = s.pixel_array.astype(np.float32)
+
+        # Force 2D
+        if img.ndim > 2:
+            img = img[..., 0]
+
+        # Replace NaNs/Infs
+        img = np.nan_to_num(img)
+
+        # Apply slope/intercept
         slope = getattr(s, "RescaleSlope", 1)
         intercept = getattr(s, "RescaleIntercept", 0)
         img = img * slope + intercept
-    
-        # Normalize to 0-255 for PIL
+
+        # Normalize 0-255 for PIL
         img_norm = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
-    
-        # Resize ALL slices to target_shape
+
+        # Resize to reference shape
         img_resized = Image.fromarray(img_norm.astype(np.uint8))
-        img_resized = img_resized.resize(target_shape[::-1], Image.BILINEAR)
-        img_resized = np.array(img_resized).astype(np.float32)
-    
-        vol_slices.append(img_resized)
-    
+        img_resized = img_resized.resize((ref_cols, ref_rows), Image.BILINEAR)
+        vol_slices.append(np.array(img_resized).astype(np.float32))
+
+    # Clean up temporary folder
+    shutil.rmtree(tmpdir)
+
+    # Stack safely
     vol = np.stack(vol_slices, axis=0)
     return vol
 
