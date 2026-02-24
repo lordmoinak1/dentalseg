@@ -4,10 +4,10 @@ from collections import defaultdict
 
 import numpy as np
 import streamlit as st
-import nibabel as nib
+import SimpleITK as sitk
+import nrrd
 from PIL import Image
 from scipy.ndimage import label as cc_label
-
 
 # ==============================
 # Constants
@@ -21,50 +21,48 @@ MODALITY_MAP = {
 }
 MODALITY_ORDER = ["T1C", "T1N", "T2F", "T2W"]
 
-
 # ==============================
 # Utility functions
 # ==============================
 
-def load_nifti(file):
-    with tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False) as tmp:
-        tmp.write(file.read())
-        path = tmp.name
-    try:
-        img = nib.load(path)
-        vol = img.get_fdata().astype(np.float32)
-        affine = img.affine
-    finally:
-        os.remove(path)
-
-    if vol.ndim > 3:
-        vol = vol[..., 0]
+def load_dicom_folder(folder_path):
+    reader = sitk.ImageSeriesReader()
+    series_ids = reader.GetGDCMSeriesIDs(folder_path)
+    if not series_ids:
+        raise ValueError(f"No DICOM series found in {folder_path}")
+    series_files = reader.GetGDCMSeriesFileNames(folder_path, series_ids[0])
+    reader.SetFileNames(series_files)
+    img = reader.Execute()
+    vol = sitk.GetArrayFromImage(img).astype(np.float32)  # shape: [z, y, x]
+    affine = np.eye(4)
+    spacing = img.GetSpacing()
+    affine[:3, :3] = np.diag(spacing)
+    affine[:3, 3] = img.GetOrigin()
     return vol, affine
 
+def load_nrrd(file):
+    data, header = nrrd.read(file)
+    return data.astype(np.int32), np.eye(4)  # assume voxel spacing is isotropic for simplicity
 
 def normalize_slice(slc):
     slc = np.nan_to_num(slc)
     vmin, vmax = slc.min(), slc.max()
     return (slc - vmin) / (vmax - vmin + 1e-8)
 
-
 def get_slice(vol, axis, idx):
     slc = np.take(vol, idx, axis=axis)
     slc = normalize_slice(slc)
-    return np.rot90(slc, k=1)  # MRI orientation unchanged from your last request
-
+    return np.rot90(slc, k=1)
 
 def resize_img(img, size=256):
     im = Image.fromarray((img * 255).astype(np.uint8))
     im = im.resize((size, size), Image.BILINEAR)
     return np.asarray(im) / 255.0
 
-
 def resize_mask(mask, size=256):
     im = Image.fromarray(mask.astype(np.uint8), "L")
     im = im.resize((size, size), Image.NEAREST)
     return np.asarray(im).astype(int)
-
 
 def overlay_segmentation(img, mask, alpha=0.4):
     base = (img * 255).astype(np.uint8)
@@ -73,15 +71,12 @@ def overlay_segmentation(img, mask, alpha=0.4):
     rgb[tumor] = (1 - alpha) * rgb[tumor] + alpha * np.array([255, 0, 0])
     return np.clip(rgb / 255.0, 0, 1)
 
-
 def spacing_from_affine(affine):
     return np.sqrt((affine[:3, :3] ** 2).sum(axis=0))
-
 
 def total_volume_mm3(seg, affine):
     voxel_vol = np.prod(spacing_from_affine(affine))
     return int(np.sum(seg > 0)) * voxel_vol
-
 
 def per_lesion_volumes(seg, affine):
     voxel_vol = np.prod(spacing_from_affine(affine))
@@ -91,23 +86,31 @@ def per_lesion_volumes(seg, affine):
         for lab in range(1, num + 1)
     }
 
-
 # ==============================
 # Streamlit UI
 # ==============================
 
 st.set_page_config(page_title="NeuroTracker", layout="wide")
-st.title("🧠 NeuroTracker — Longitudinal Quantitative Tumor Tracking")
+st.title("🧠 NeuroTracker — Longitudinal Quantitative Tumor Tracking (DICOM + NRRD)")
 
-files = st.file_uploader(
-    "Upload all BraTS-GLI .nii.gz files (MRI + seg)",
-    type=["gz"],
+st.markdown("Upload DICOM folders (one per modality per timepoint) and NRRD segmentation masks.")
+
+# Upload multiple DICOM folders
+dicom_folders = st.file_uploader(
+    "Upload DICOM folders (zipped)",
+    type=["zip"],
     accept_multiple_files=True,
 )
 
-if not files:
-    st.stop()
+# Upload NRRD segmentation files
+nrrd_files = st.file_uploader(
+    "Upload segmentation masks (.nrrd)",
+    type=["nrrd"],
+    accept_multiple_files=True,
+)
 
+if not dicom_folders and not nrrd_files:
+    st.stop()
 
 # ==============================
 # Group files by timepoint
@@ -115,20 +118,22 @@ if not files:
 
 timepoints = defaultdict(lambda: {"modalities": {}, "seg": None})
 
-for f in files:
-    name = f.name.lower()
+import zipfile
 
-    if name.endswith("-seg.nii.gz"):
-        tp_id = name.replace("-seg.nii.gz", "")
-        timepoints[tp_id]["seg"] = f
-        continue
-
+for f in dicom_folders:
+    name = f.name.lower().replace(".zip", "")
     for tag, mod in MODALITY_MAP.items():
         if tag in name:
-            tp_id = name.split(tag)[0]
-            timepoints[tp_id]["modalities"][mod] = f
+            # Extract zip to temp folder
+            tmpdir = tempfile.mkdtemp()
+            with zipfile.ZipFile(f, "r") as zip_ref:
+                zip_ref.extractall(tmpdir)
+            timepoints[name.replace(tag, "")]["modalities"][mod] = tmpdir
             break
 
+for f in nrrd_files:
+    name = f.name.lower().replace(".nrrd", "")
+    timepoints[name]["seg"] = f
 
 # ==============================
 # Layout
@@ -137,13 +142,12 @@ for f in files:
 viewer_col, metrics_col = st.columns([3, 1])
 metrics_data = []
 
-
 # ==============================
 # LEFT: Viewer
 # ==============================
 
 with viewer_col:
-    axis = 2
+    axis = 0  # DICOM/SimpleITK loads as [z, y, x]
 
     for tp_idx, (_, data) in enumerate(sorted(timepoints.items()), start=1):
         mods = data["modalities"]
@@ -152,7 +156,6 @@ with viewer_col:
         if any(m not in mods for m in MODALITY_ORDER):
             continue
 
-        # Row: rotated label + MRIs
         label_col, *img_cols = st.columns([0.5, 1, 1, 1, 1])
 
         with label_col:
@@ -174,16 +177,16 @@ with viewer_col:
 
         volumes = {}
         for mod in MODALITY_ORDER:
-            vol, affine = load_nifti(mods[mod])
+            vol, affine = load_dicom_folder(mods[mod])
             volumes[mod] = vol
 
         seg = seg_affine = None
         if seg_file:
-            seg, seg_affine = load_nifti(seg_file)
+            seg, seg_affine = load_nrrd(seg_file)
 
         max_slices = min(v.shape[axis] for v in volumes.values())
         slice_idx = st.slider(
-            f"Axial slice — Timepoint {tp_idx}",
+            f"Slice — Timepoint {tp_idx}",
             0,
             max_slices - 1,
             max_slices // 2,
@@ -207,23 +210,18 @@ with viewer_col:
                 }
             )
 
-
 # ==============================
 # RIGHT: Metrics Pane
 # ==============================
 
 with metrics_col:
-    # st.subheader("📊 Metrics")
-
     for m in metrics_data:
         st.markdown(f"### ⏱ Timepoint {m['tp']}")
         st.markdown(f"- **Total volume:** {m['total']:,.2f} mm³")
         st.markdown(f"- **Lesions:** {len(m['per_lesion'])}")
         st.markdown("**Per-lesion volume (mm³):**")
-
         for lab, vol in sorted(
             m["per_lesion"].items(), key=lambda x: x[1], reverse=True
         ):
             st.markdown(f"• Lesion {lab}: {vol:,.2f}")
-
         st.markdown("---")
