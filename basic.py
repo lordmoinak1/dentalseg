@@ -36,17 +36,23 @@ def load_dicom_zip(zip_file):
             return float(ds.SliceLocation)
         else:
             return 0
-
     slices.sort(key=get_slice_position)
 
-    vol = np.stack([s.pixel_array for s in slices], axis=0).astype(np.float32)
-
-    # Apply slope/intercept
-    for i, s in enumerate(slices):
+    # Make all slices the same shape
+    target_shape = (slices[0].Rows, slices[0].Columns)
+    vol_slices = []
+    for s in slices:
+        img = s.pixel_array.astype(np.float32)
         slope = getattr(s, "RescaleSlope", 1)
         intercept = getattr(s, "RescaleIntercept", 0)
-        vol[i] = vol[i]*slope + intercept
+        img = img*slope + intercept
 
+        if img.shape != target_shape:
+            img = np.array(Image.fromarray(img).resize(target_shape[::-1], Image.BILINEAR))
+
+        vol_slices.append(img)
+
+    vol = np.stack(vol_slices, axis=0)
     return vol
 
 def load_nrrd(file):
