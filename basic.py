@@ -88,15 +88,17 @@ def normalize_slice(slc):
     slc = np.nan_to_num(slc)
     return (slc - slc.min()) / (slc.max() - slc.min() + 1e-8)
 
-def overlay_segmentation(img, mask, alpha=0.4):
+def overlay_segmentation(img, mask, alpha=0.4, color=[0, 255, 0]):
     """
-    Overlay binary mask on a normalized image (0-1)
+    Overlay a binary mask on a normalized image (0-1)
     img: 2D float32 image normalized 0-1
     mask: 2D int mask (0-background, >0-label)
+    alpha: blending factor
+    color: RGB color of overlay (default green)
     """
     base = (img*255).astype(np.uint8)
     rgb = np.stack([base]*3, axis=-1).astype(np.float32)
-    rgb[mask>0] = (1-alpha)*rgb[mask>0] + alpha*np.array([255,0,0])
+    rgb[mask>0] = (1-alpha)*rgb[mask>0] + alpha*np.array(color)
     return np.clip(rgb/255.0, 0, 1)
 
 def resize_img(img, size=256):
@@ -123,20 +125,21 @@ if dicom_zip:
 
     nrrd_file = st.file_uploader("Upload Segmentation (.nrrd)", type="nrrd")
 
-    if nrrd_file:
-        seg = load_nrrd(nrrd_file)
-    
-        # Ensure seg has at least as many slices as DICOM
-        seg_slice_idx = min(slice_idx, seg.shape[0]-1)
-    
-        # Resize segmentation to match DICOM slice exactly
-        seg_slice = np.array(
-            Image.fromarray(seg[seg_slice_idx]).resize((img.shape[1], img.shape[0]), Image.NEAREST)
-        )
-    
-        # Make sure it's integer type for masking
-        seg_slice = (seg_slice > 0).astype(int)
-    
-        img = overlay_segmentation(img, seg_slice)
+    # if nrrd_file:
+    seg = load_nrrd(nrrd_file)
+
+    # Make sure slice index is valid
+    seg_slice_idx = min(slice_idx, seg.shape[0]-1)
+
+    # Resize segmentation to match DICOM slice
+    seg_slice = np.array(
+        Image.fromarray(seg[seg_slice_idx]).resize((img.shape[1], img.shape[0]), Image.NEAREST)
+    )
+
+    # Convert to binary mask
+    seg_slice = (seg_slice > 0).astype(int)
+
+    # Overlay in green
+    img = overlay_segmentation(img, seg_slice, alpha=0.4, color=[0, 255, 0])
 
     st.image(resize_img(img), caption=f"Slice {slice_idx}", use_column_width=True)
