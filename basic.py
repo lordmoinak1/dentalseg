@@ -27,7 +27,18 @@ def load_dicom_zip(zip_file):
         raise ValueError("No DICOM files found in zip")
 
     slices = [pydicom.dcmread(f) for f in files]
-    slices.sort(key=lambda s: int(s.InstanceNumber))
+
+    # Sort slices by ImagePositionPatient[2] or SliceLocation
+    def get_slice_position(ds):
+        if hasattr(ds, "ImagePositionPatient"):
+            return float(ds.ImagePositionPatient[2])
+        elif hasattr(ds, "SliceLocation"):
+            return float(ds.SliceLocation)
+        else:
+            return 0
+
+    slices.sort(key=get_slice_position)
+
     vol = np.stack([s.pixel_array for s in slices], axis=0).astype(np.float32)
 
     # Apply slope/intercept
