@@ -73,8 +73,15 @@ def load_dicom_zip(zip_file):
     vol = np.stack(vol_slices, axis=0)
     return vol
 
-def load_nrrd(file):
-    data, _ = nrrd.read(file)
+def load_nrrd(uploaded_file):
+    import tempfile
+    # Save BytesIO to a temp file
+    with tempfile.NamedTemporaryFile(suffix=".nrrd", delete=False) as tmp:
+        tmp.write(uploaded_file.read())
+        tmp_path = tmp.name
+    # Read with nrrd
+    data, _ = nrrd.read(tmp_path)
+    os.remove(tmp_path)
     return data.astype(int)
 
 def normalize_slice(slc):
@@ -108,6 +115,8 @@ if dicom_zip:
     # Slider to pick slice
     slice_idx = st.slider("Slice index", 0, vol.shape[0]-1, vol.shape[0]//2)
     img = normalize_slice(vol[slice_idx])
+
+    nrrd_file = st.file_uploader("Upload Segmentation (.nrrd)", type="nrrd")
 
     if nrrd_file:
         seg = load_nrrd(nrrd_file)
