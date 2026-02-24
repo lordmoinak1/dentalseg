@@ -120,10 +120,18 @@ if dicom_zip:
 
     if nrrd_file:
         seg = load_nrrd(nrrd_file)
-        # Resize segmentation to match slice dimensions
+    
+        # Ensure seg has at least as many slices as DICOM
+        seg_slice_idx = min(slice_idx, seg.shape[0]-1)
+    
+        # Resize segmentation to match DICOM slice exactly
         seg_slice = np.array(
-            Image.fromarray(seg[slice_idx]).resize((img.shape[1], img.shape[0]), Image.NEAREST)
+            Image.fromarray(seg[seg_slice_idx]).resize((img.shape[1], img.shape[0]), Image.NEAREST)
         )
+    
+        # Make sure it's integer type for masking
+        seg_slice = (seg_slice > 0).astype(int)
+    
         img = overlay_segmentation(img, seg_slice)
 
     st.image(resize_img(img), caption=f"Slice {slice_idx}", use_column_width=True)
