@@ -15,17 +15,27 @@ def load_dicom_zip(zip_file):
     tmpdir = tempfile.mkdtemp()
     with zipfile.ZipFile(zip_file, "r") as z:
         z.extractall(tmpdir)
-    files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".dcm")]
+
+    # Recursively find all .dcm files
+    files = []
+    for root, _, filenames in os.walk(tmpdir):
+        for f in filenames:
+            if f.lower().endswith(".dcm"):
+                files.append(os.path.join(root, f))
+
     if not files:
         raise ValueError("No DICOM files found in zip")
+
     slices = [pydicom.dcmread(f) for f in files]
     slices.sort(key=lambda s: int(s.InstanceNumber))
     vol = np.stack([s.pixel_array for s in slices], axis=0).astype(np.float32)
+
     # Apply slope/intercept
     for i, s in enumerate(slices):
         slope = getattr(s, "RescaleSlope", 1)
         intercept = getattr(s, "RescaleIntercept", 0)
         vol[i] = vol[i]*slope + intercept
+
     return vol
 
 def load_nrrd(file):
