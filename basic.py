@@ -89,6 +89,11 @@ def normalize_slice(slc):
     return (slc - slc.min()) / (slc.max() - slc.min() + 1e-8)
 
 def overlay_segmentation(img, mask, alpha=0.4):
+    """
+    Overlay binary mask on a normalized image (0-1)
+    img: 2D float32 image normalized 0-1
+    mask: 2D int mask (0-background, >0-label)
+    """
     base = (img*255).astype(np.uint8)
     rgb = np.stack([base]*3, axis=-1).astype(np.float32)
     rgb[mask>0] = (1-alpha)*rgb[mask>0] + alpha*np.array([255,0,0])
